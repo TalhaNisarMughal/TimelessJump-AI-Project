@@ -1,0 +1,48 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+*.egg-info/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Generated images
+generated_jump_rope_*.png
+
+# Training folders (exclude from git)
+01 - Airborne-1 _ PVC/
+01 - Airborne-1 _ PVC - Copy/
+duplicates_review/
+flux_dataset/
+img_venv/
+processed_for_SXDL/
+processed_output/
+
+# Other Python files (keeping only main app)
+caption.py
+extra.py
+gemini_image_gen.py
+main.py
+
+# Documentation files
+MODEL TRAINING UPDATE.docx
+MODEL TRAINING UPDATE.pdf
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Environment variables
+.env
+.env.local
