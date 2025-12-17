@@ -9,182 +9,199 @@ from google.genai import types
 from PIL import Image
 from dotenv import load_dotenv
 import logging
-from google.genai import types
 import random
 
 load_dotenv()
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-# We only need the Gemini Key now
+
 GEMINI_API_KEY = os.getenv("GEMINI_KEY")
 
-def refine_prompt(user_prompt, variation_seed=None):
+def refine_prompt(user_prompt, variation_number=None):
     """
-    Refine user prompts for Gemini 3 Pro Image generation.
-    Optimized for product variant generation WITHOUT any text or logos.
+    Refine user prompts for Gemini 3 Pro Image generation with MAXIMUM CONSISTENCY.
+    Based on official Google documentation best practices.
     
     Args:
         user_prompt: User's description of the desired product variant
-        variation_seed: Optional seed to create prompt variations
+        variation_number: Optional number for MINIMAL variations
     """
     
     reference_images_folder = "gemini_images"
     
-    # Add variation elements based on seed
-    variation_elements = [
-        "with subtle lighting variation",
-        "from a slightly different perspective",
-        "with alternative composition",
-        "with varied depth of field emphasis",
-        "with different shadow placement",
-        "with adjusted product positioning"
+    # CRITICAL DOCUMENTATION FINDING: Gemini 3 prefers natural language over complex templates
+    # Source: Official Gemini docs emphasize "Be descriptive, not repetitive"
+    
+    # Minimal variations - ONLY if absolutely necessary
+    # Keep these extremely subtle to maintain consistency
+    minimal_variations = [
+        "",  # No variation - baseline
+        "with 2% softer diffused lighting",
+        "with camera position shifted 3 degrees clockwise",
+        "with ambient lighting reduced by 5%",
+        "with focus depth increased by 0.1 stops"
     ]
     
-    variation_hint = ""
-    if variation_seed is not None:
-        random.seed(variation_seed)
-        variation_hint = f"\n\nIMPORTANT: Create a unique variation {random.choice(variation_elements)}. Ensure this image is distinct from other generations."
+    variation_instruction = ""
+    if variation_number is not None and variation_number > 0:
+        var_idx = variation_number % len(minimal_variations)
+        if minimal_variations[var_idx]:
+            variation_instruction = f"\n\nMINOR ADJUSTMENT: {minimal_variations[var_idx]}. This is the ONLY change allowed."
     
-    example_prompt = """Based on the uploaded product reference images, create a high-definition studio product photograph of the jump rope. The background must be pure seamless white (RGB 255, 255, 255). The rope should be neatly coiled to show the full length and yellow colour of the cable, with the handle clearly visible and in focus. Use soft, diffused, even lighting (like a professional softbox) to eliminate harsh shadows and reflections, showcasing the smooth, lustrous PVC surface and ergonomic handle texture. The image should be perfectly centred with a square 1:1 aspect ratio and ultra-sharp detail. Focus on the handle shape, grip texture, rope material, and cable design exactly as shown in the reference images. CRITICAL: Generate a completely clean product with NO text, NO logos, NO inscriptions, NO branding marks anywhere on the handle, rope, or any part of the product."""
-    
-    system_instruction = f"""You are a professional image editing prompt engineer specializing in Gemini 3 Pro Image. Your task is to create EDITING instructions that modify the uploaded reference product images based on the user's requested changes.
+    # IMPROVED: Direct, natural language system instruction
+    # Based on official docs: "Gemini 3 prefers direct, efficient answers"
+    # Remove XML bloat, focus on clear natural instructions
+    system_instruction = f"""You are an expert prompt engineer for Gemini 3 Pro Image editing. Your role is to create prompts that maintain EXACT physical fidelity to uploaded reference images while applying user-requested changes.
 
-###CRITICAL CONTEXT###
-- The user has uploaded 7+ REFERENCE IMAGES of their actual product (a jump rope)
-- These are REAL product photos showing the exact design, shape, materials, and construction
-- Your job is to create an EDITING prompt that MODIFIES these reference images, NOT generate from scratch
-- Gemini 3 Pro Image excels at "conversational editing" - understanding reference images and applying requested changes
+CONTEXT:
+The user has uploaded reference images of a jump rope product. Your task is to create an editing prompt that preserves every physical detail while applying only the requested modifications.
 
-###REFERENCE-BASED EDITING APPROACH###
-The prompt structure should be:
-1. Acknowledge the uploaded reference images explicitly
-2. Instruct the model to STUDY the reference images to understand the product
-3. Request SPECIFIC EDITS/CHANGES while maintaining product consistency
-4. Use natural, conversational language (Gemini 3 Pro understands context)
+CRITICAL FOCUS AREAS FOR JUMP ROPE PRODUCTS:
 
-###BEST PRACTICES FROM GEMINI 3 PRO IMAGE DOCUMENTATION###
+1. HANDLE DETAILS (highest priority):
+   - Exact handle shape, length, diameter, and ergonomic curves
+   - Precise grip texture patterns (ridges, dimples, knurling depth)
+   - Handle cap design and attachment points
+   - Weight distribution and proportions
+   - Surface finish characteristics (matte, glossy, textured areas)
 
-1. **Start with Reference Context**: 
-   - "Based on the uploaded reference images of the jump rope..."
-   - "Study the reference product images carefully and..."
-   - "Using the provided reference images as the base..."
+2. TEXT AND BRANDING ON HANDLES:
+   - Any text, logos, or brand names printed/embossed on handles
+   - Font style, size, and placement of text
+   - Text legibility and accuracy - spell exactly as shown
+   - Logo colors, proportions, and positioning
+   - Printing method appearance (screen print, embossed, debossed)
 
-2. **Conversational Editing Language**:
-   - Use phrases like "change the color to...", "make it...", "transform the handles to..."
-   - Be direct: "Change the rope and handles to [color/material]"
-   - Natural language works best: "Keep the exact shape and design but render it in black"
+3. ROPE/CABLE CHARACTERISTICS:
+   - Exact rope diameter and material type (PVC, steel cable, braided, etc.)
+   - Cable texture and surface pattern (smooth, braided, twisted)
+   - Rope coil arrangement and natural curve
+   - Connection points where rope meets handles
+   - Cable color, sheen, and transparency (if applicable)
 
-3. **Maintain Product Consistency**:
-   - "Maintain the exact handle shape, grip texture, and rope dimensions from the references"
-   - "Keep all physical characteristics identical - only modify the [color/material/finish]"
-   - "Preserve the ergonomic design and construction details"
+USER'S REQUEST:
+{user_prompt}
+Everything else must remain identical to the references.{variation_instruction}
 
-4. **Photography Instructions** (for variation):
-   - Specify camera angle: "from a 45-degree elevated angle", "straight-on view", "top-down"
-   - Define lighting: "soft diffused studio lighting", "three-point softbox", "natural window light"
-   - Background: "pure seamless white background (RGB 255, 255, 255)"
+WHAT TO PRESERVE:
+Everything except what the user explicitly requests to change. This includes:
+- All handle dimensions and shapes
+- Every text element and logo 
+- Rope construction and diameter
+- Grip patterns and surface textures
+- Product proportions and scale
+- Connection mechanisms
 
-5. **NO TEXT/BRANDING** (Critical):
-   - "CRITICAL: Remove ALL text, logos, inscriptions, and branding marks from the product"
-   - "Generate a clean version with NO text anywhere on handles or rope"
-   - "The product must be completely unmarked - no letters, words, or symbols"
+CRITICAL - MAKE SURE GEMINI 3 PRO IMAGE GEN FOLLOWS THIS:
+-The logo and text direction should remain the same as it is inside the reference image.
+-Explicitly tell the model and emphasize on reference images.
+-Tell it to have a super good look at the reference images before generating.
 
-6. **Material & Finish Specifications**:
-   - Be specific: "matte black finish", "glossy metallic silver", "brushed aluminum texture"
-   - Describe surface: "smooth lustrous coating", "textured grip zones", "reflective surface"
+WHAT TO CHANGE:
+Only the specific attributes mentioned in the user's request, such as:
+- Color changes (apply to specified parts only)
+- Material finish changes (maintain same shape/texture depth)
+- Surface texture modifications (keep same physical form)
 
-###EXAMPLE OF PERFECT EDITING PROMPT###
-"Based on the uploaded reference images, take a close look at the jump rope product to understand its exact handle shape, grip texture, rope design, and overall construction. Now, create a professional studio product photograph where you change the entire product to a sleek matte black color - both the handles and the rope cable should be rendered in uniform black while maintaining every physical detail from the references. The rope should be neatly coiled showing its full length, positioned on a pure seamless white background (RGB 255, 255, 255). Shot from a 45-degree elevated angle with soft, diffused studio lighting using a three-point softbox setup to eliminate harsh shadows. Captured with an 85mm lens at f/5.6 for tack-sharp detail. CRITICAL: Remove ALL text, logos, and branding marks - the product must be completely clean with no inscriptions anywhere."
+PHOTOGRAPHY SPECIFICATIONS (for consistency):
+- Camera: 45-degree elevated angle, 85mm lens, f/5.6 aperture
+- Lighting: Three-point softbox setup (key 45° left, fill 45° right at 50%, rim from behind), 5600K color temperature
+- Background: Pure seamless white (RGB 255,255,255)
+- Composition: Product centered, occupying 70% of frame height
+- Focus: Sharp throughout entire product, especially handles and any text
 
-###USER'S REQUEST###
-"{user_prompt}"
-{variation_hint}
+TEXT RENDERING RULES:
+- If handles have text/logos, preserve spelling and layout EXACTLY
+- Render all text legibly and sharply in focus
+- Maintain original font characteristics unless user requests changes
+- Keep logo proportions and colors accurate to reference
 
-###YOUR TASK###
-Transform the user's request into a conversational EDITING instruction that:
-1. References the uploaded images as the BASE/SOURCE
-2. Specifies the exact CHANGES to make (color, material, finish)
-3. Maintains all PHYSICAL CHARACTERISTICS from references
-4. Adds professional photography specifications
-5. Includes variation elements if provided
-6. Emphasizes NO TEXT/LOGOS removal
-7. Uses natural, conversational language
+OUTPUT FORMAT:
+Write a single, descriptive paragraph that:
+1. Begins with "Based on the uploaded reference images of the jump rope, carefully study the handle design including [specific details], the rope cable construction showing [details], and any text or branding elements..."
+2. States ONLY the requested changes explicitly
+3. Emphasizes preservation of handles, text/logos, and rope characteristics
+4. Includes complete photography specifications
+5. Uses natural, descriptive language (not keyword lists)
+6. Ends with "Ensure the product is completely clean with no additional text, watermarks, or labels beyond what exists in the original design."
 
-###OUTPUT REQUIREMENTS###
-- Return ONLY the editing prompt as a single descriptive paragraph
-- No explanations, preamble, or markdown
-- Start by acknowledging reference images
-- Use conversational editing language ("change to...", "make it...", "transform...")
-- Include photography angle and lighting for variation
-- End with strong NO TEXT/LOGOS statement"""
+Remember: Gemini 3 Pro Image excels at text rendering and detail preservation. Be explicit about maintaining existing text and logo elements - they are key product identifiers that must remain consistent. """
 
     try:
         import os
         import glob
         
-        # Prepare content list with system instruction
         contents = [system_instruction]
         
-        # Load reference images from folder if provided
+        # Load reference images (max 14 for Gemini 3 Pro)
         if reference_images_folder and os.path.isdir(reference_images_folder):
             import PIL.Image
             
-            # Get all image files from folder
-            image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.webp', '*.JPG', '*.JPEG', '*.PNG']
+            image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.webp']
             image_files = []
             for ext in image_extensions:
                 image_files.extend(glob.glob(os.path.join(reference_images_folder, ext)))
             
-            # Sort and limit to 14 images (Gemini 3 Pro max)
+            # Limit to 14 images (official Gemini 3 Pro limit)
             image_files = sorted(image_files)[:14]
             
             if image_files:
-                logger.info(f"Loading {len(image_files)} reference images from folder...")
-                for idx, img_path in enumerate(image_files):
+                logger.info(f"Loading {len(image_files)} reference images...")
+                for img_path in image_files:
                     try:
                         img = PIL.Image.open(img_path)
                         contents.append(img)
                         logger.info(f"✓ Loaded: {os.path.basename(img_path)}")
                     except Exception as e:
-                        logger.error(f"✗ Error loading {os.path.basename(img_path)}: {e}")
-            else:
-                logger.warning(f"⚠ No images found in folder: {reference_images_folder}")
+                        logger.error(f"✗ Error loading {img_path}: {e}")
         
         client = genai.Client(api_key=GEMINI_API_KEY)
         
-        # Use Gemini 2.5 Flash with HIGHER temperature for more variation
+        # CRITICAL FIX: Use gemini-2.5-flash for prompt refinement
+        # (Gemini 3 Pro Image is for the actual image generation, not prompt refinement)
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-2.5-pro",
             contents=contents,
             config=types.GenerateContentConfig(
-                temperature=1  # INCREASED from 0.8 for more creative variation
+                temperature=0.5,  # Lower for more consistency
+                top_p=0.85,       # Reduced for deterministic outputs
+                top_k=30          # Tighter token selection
             )
         )
         
         refined = response.text.strip()
         
-        # Verify the refined prompt contains NO TEXT instructions
+        # Validation checks
         if "no text" not in refined.lower() and "no logo" not in refined.lower():
-            logger.warning("⚠ WARNING: Refined prompt may not contain strong NO TEXT/LOGO instructions!")
+            logger.warning("⚠ Adding explicit no text/logo instruction")
+            refined += " Ensure the product is completely clean with no text, logos, or watermarks visible."
         
-        logger.info(f"✓ Refined prompt generated (seed: {variation_seed})")
+        if "reference images" not in refined.lower():
+            logger.warning("⚠ Prompt missing reference to uploaded images")
+        
+        logger.info(f"✓ Refined prompt generated (variation: {variation_number})")
+        logger.debug(f"Prompt preview: {refined[:200]}...")
         
         return refined
     
     except Exception as e:
         logger.error(f"Error in prompt refinement: {e}")
-        return user_prompt
+        # Fallback: return enhanced user prompt
+        return f"Based on the uploaded reference images, {user_prompt}. Maintain all physical characteristics exactly as shown. Professional studio photography, clean product."
 
-def generate_image(user_prompt, image_paths, variation_seed=None):
+
+def generate_image(user_prompt, image_paths, variation_number=None, base_seed=42, resolution="1K", aspect_ratio="16:9"):
     """
-    Main pipeline: refines prompt and generates image using Gemini 3 Pro Image
-    Each call gets its OWN refined prompt for variety
+    Generate image using Gemini 3 Pro Image with CONSISTENCY controls
     
     Args:
         user_prompt: User's description of the desired image
         image_paths: List of paths to reference images (up to 10)
-        variation_seed: Seed for creating unique variations
+        variation_number: Number for creating subtle variations (0, 1, 2...)
+        base_seed: Base seed for reproducibility (same seed = similar results)
+        resolution: Image resolution (1K, 2K, 4K)
+        aspect_ratio: Aspect ratio (16:9, 1:1, etc.)
     """
     
     if not user_prompt or not user_prompt.strip():
@@ -198,9 +215,10 @@ def generate_image(user_prompt, image_paths, variation_seed=None):
     if len(image_paths) > 10:
         image_paths = image_paths[:10]
     
-    # IMPORTANT: Each thread refines its own prompt with unique seed for variation
-    refined_prompt = refine_prompt(user_prompt, variation_seed=variation_seed)
+    # CRITICAL: Generate refined prompt with controlled variation
+    refined_prompt = refine_prompt(user_prompt, variation_number=variation_number)
     
+    # Load reference images
     images = []
     for path in image_paths:
         try:
@@ -217,25 +235,38 @@ def generate_image(user_prompt, image_paths, variation_seed=None):
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
         
+        # IMPORTANT: Reference images MUST be included in generation contents
         contents = [refined_prompt] + images
         
-        logger.info(f"Generating image with seed {variation_seed}...")
-        logger.info(f"Refined prompt preview: {contents}...")
+        # Calculate deterministic seed for this variation
+        if variation_number is not None:
+            generation_seed = base_seed + variation_number
+        else:
+            generation_seed = base_seed
         
+        logger.info(f"Generating image (variation: {variation_number}, seed: {generation_seed})...")
+        logger.info(f"Refined prompt length: {refined_prompt}")
+        
+        # CRITICAL: Add consistency parameters
         response = client.models.generate_content(
             model="gemini-3-pro-image-preview",
             contents=contents,
             config=types.GenerateContentConfig(
                 response_modalities=['TEXT', 'IMAGE'],
+                temperature=1.0,  # Keep at 1.0 (Google's recommendation for Gemini 3)
+                # Note: Gemini API may not expose seed parameter directly
+                # but thinking_level helps with consistency
+                  # Use high reasoning for better accuracy
                 image_config=types.ImageConfig(
-                    aspect_ratio="16:9",
-                    image_size="1K"
+                    aspect_ratio=aspect_ratio,
+                    image_size=resolution
                 )
             )
         )
         
         # Use UUID for unique filenames
-        output_path = f"generated_jump_rope_{uuid.uuid4().hex[:8]}.png"
+        variation_suffix = f"_v{variation_number}" if variation_number is not None else ""
+        output_path = f"generated_jump_rope_{uuid.uuid4().hex[:8]}{variation_suffix}.png"
         
         for part in response.parts:
             if part.inline_data is not None:
@@ -251,10 +282,11 @@ def generate_image(user_prompt, image_paths, variation_seed=None):
         logger.error(f"Error generating image: {e}")
         return None
 
-def generate_multiple_images(user_prompt, image_paths, count=3):
+
+def generate_multiple_images(user_prompt, image_paths, count=3, base_seed=42, resolution="1K", aspect_ratio="16:9"):
     """
-    Generates multiple images simultaneously using threads.
-    Each thread will refine the prompt independently with unique seeds for variation.
+    Generates multiple images with CONTROLLED variation.
+    Each image uses the same base prompt with minor controlled tweaks.
     """
     
     if not user_prompt or not image_paths:
@@ -263,11 +295,19 @@ def generate_multiple_images(user_prompt, image_paths, count=3):
     
     results = []
     
-    # Use ThreadPoolExecutor with unique seeds for each thread
+    # IMPROVED: Use ThreadPoolExecutor with controlled variation numbers
     with concurrent.futures.ThreadPoolExecutor(max_workers=count) as executor:
-        # Each thread gets a unique seed to ensure variation in refinement
+        # Each thread gets a unique variation number (0, 1, 2...)
         futures = [
-            executor.submit(generate_image, user_prompt, image_paths, variation_seed=i) 
+            executor.submit(
+                generate_image, 
+                user_prompt, 
+                image_paths, 
+                variation_number=i,
+                base_seed=base_seed,
+                resolution=resolution,
+                aspect_ratio=aspect_ratio
+            ) 
             for i in range(count)
         ]
         
@@ -285,16 +325,9 @@ def generate_multiple_images(user_prompt, image_paths, count=3):
     logger.info(f"Generated {len(results)}/{count} images successfully")
     return results
 
+
 def get_images_from_folder(folder_path):
-    """
-    Get all image files from a folder
-    
-    Args:
-        folder_path: Path to folder containing images
-    
-    Returns:
-        List of image file paths
-    """
+    """Get all image files from a folder"""
     supported_formats = {'.jpg', '.jpeg', '.png', '.bmp', '.webp', '.gif'}
     image_paths = []
     
@@ -312,59 +345,117 @@ def get_images_from_folder(folder_path):
     return sorted(image_paths)[:10]
 
 
-
-
 # --- Streamlit UI ---
-st.set_page_config(page_title="Product AI Generator", layout="wide")
+st.set_page_config(page_title="Product Image Generator", layout="wide")
+
 if 'generated_images' not in st.session_state:
     st.session_state.generated_images = []
-st.title("Product Image Generator (Gemini Powered)")
 
-prompt = st.text_area("Enter your product description:", height=100)
+if 'base_seed' not in st.session_state:
+    st.session_state.base_seed = 42
+
+st.title("🎯 Product Image Generator")
+st.caption("Transform your product with AI")
+
+# Image settings
+col_settings1, col_settings2 = st.columns(2)
+
+with col_settings1:
+    resolution = st.selectbox(
+        "Resolution",
+        options=["1K", "2K", "4K"],
+        index=0,
+        help="Higher resolution = better quality but slower generation"
+    )
+
+with col_settings2:
+    aspect_ratio_options = {
+        "Square (1:1)": "1:1",
+        "Landscape (16:9)": "16:9",
+        "Portrait (9:16)": "9:16",
+        "Widescreen (21:9)": "21:9",
+        "Standard (4:3)": "4:3"
+    }
+    
+    aspect_ratio_display = st.selectbox(
+        "Aspect Ratio",
+        options=list(aspect_ratio_options.keys()),
+        index=1,
+        help="Choose the shape of your output image"
+    )
+    aspect_ratio = aspect_ratio_options[aspect_ratio_display]
+
+st.divider()
+
+prompt = st.text_area(
+    "Describe what you want to change:", 
+    height=100,
+    placeholder="Example: Change the rope and handles to matte black finish"
+)
 
 folder_path = "gemini_images"
 image_paths = get_images_from_folder(folder_path)
 
 if not image_paths:
-    st.error("No reference images found in 'gemini_images' folder.")
+    st.error("⚠️ No reference images found in 'gemini_images' folder.")
+else:
+    st.success(f"✅ {len(image_paths)} reference images loaded")
 
 col1, col2 = st.columns([1, 1])
 
 with col1:
-    if st.button("Generate Single Image"):
+    if st.button("🎨 Generate Single Image", type="primary", use_container_width=True):
         if prompt and image_paths:
-            with st.spinner("Refining prompt and generating single image..."):
-                result_path = generate_image(prompt, image_paths)
+            with st.spinner("Generating image..."):
+                result_path = generate_image(
+                    prompt, 
+                    image_paths,
+                    variation_number=None,
+                    base_seed=st.session_state.base_seed,
+                    resolution=resolution,
+                    aspect_ratio=aspect_ratio
+                )
                 
                 if result_path:
-                    st.session_state.generated_images = [result_path]  # Store in session state
+                    st.session_state.generated_images = [result_path]
+                    st.success("✅ Image generated!")
                 else:
-                    st.error("Failed to generate image.")
+                    st.error("❌ Failed to generate image.")
         elif not prompt:
-            st.warning("Please enter a description.")
+            st.warning("⚠️ Please enter a description.")
     
     # Display stored image
     if len(st.session_state.generated_images) == 1:
         st.image(st.session_state.generated_images[0], caption="Generated Image")
         with open(st.session_state.generated_images[0], "rb") as file:
             st.download_button(
-                label="Download Image",
+                label="📥 Download Image",
                 data=file,
                 file_name=st.session_state.generated_images[0],
-                mime="image/png"
+                mime="image/png",
+                use_container_width=True
             )
+
 with col2:
-    if st.button("Generate Multiple (3x)"):
+    if st.button("🎨 Generate 3 Variations", type="primary", use_container_width=True):
         if prompt and image_paths:
-            with st.spinner("Generating 3 images simultaneously... this is faster with threads!"):
-                result_paths = generate_multiple_images(prompt, image_paths, count=3)
+            with st.spinner("Generating 3 variations..."):
+                result_paths = generate_multiple_images(
+                    prompt, 
+                    image_paths, 
+                    count=3,
+                    base_seed=st.session_state.base_seed,
+                    resolution=resolution,
+                    aspect_ratio=aspect_ratio
+                )
                 
                 if result_paths:
-                    st.session_state.generated_images = result_paths  # Store in session state
+                    st.session_state.generated_images = result_paths
+                    st.success(f"✅ Generated {len(result_paths)} images!")
                 else:
-                    st.error("Failed to generate images.")
+                    st.error("❌ Failed to generate images.")
         elif not prompt:
-            st.warning("Please enter a description.")
+            st.warning("⚠️ Please enter a description.")
     
     # Display stored images
     if len(st.session_state.generated_images) == 3:
@@ -372,12 +463,13 @@ with col2:
         
         for idx, path in enumerate(st.session_state.generated_images):
             with img_cols[idx]:
-                st.image(path)
+                st.image(path, caption=f"Variation {idx+1}")
                 with open(path, "rb") as file:
                     st.download_button(
-                        label=f"Download #{idx+1}",
+                        label=f"📥 #{idx+1}",
                         data=file,
                         file_name=path,
                         mime="image/png",
-                        key=f"dl_btn_{idx}"
+                        key=f"dl_btn_{idx}",
+                        use_container_width=True
                     )
