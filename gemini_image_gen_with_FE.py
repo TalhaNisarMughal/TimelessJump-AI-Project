@@ -397,9 +397,9 @@ folder_path = "gemini_images"
 image_paths = get_images_from_folder(folder_path)
 
 if not image_paths:
-    st.error("⚠️ No reference images found in 'gemini_images' folder.")
+    logger.error("⚠️ No reference images found in 'gemini_images' folder.")
 else:
-    st.success(f"✅ {len(image_paths)} reference images loaded")
+    logger.error(f"✅ {len(image_paths)} reference images loaded")
 
 col1, col2 = st.columns([1, 1])
 
