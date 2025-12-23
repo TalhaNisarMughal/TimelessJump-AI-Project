@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 GEMINI_API_KEY = os.getenv("GEMINI_KEY")
 
-def refine_prompt(user_prompt, variation_number=None):
+def refine_prompt(user_prompt, variation_number=None, selected_color=None):
     """
     Refine user prompts for Gemini 3 Pro Image generation with MAXIMUM CONSISTENCY.
     Based on official Google documentation best practices.
@@ -27,9 +27,15 @@ def refine_prompt(user_prompt, variation_number=None):
     Args:
         user_prompt: User's description of the desired product variant
         variation_number: Optional number for MINIMAL variations
+        selected_color: Hex color code selected by user (e.g., "#FF5733")
     """
     
     reference_images_folder = "gemini_images"
+    
+    # Add color instruction if color is provided
+    color_instruction = ""
+    if selected_color:
+        color_instruction = f"\n\nCOLOR SPECIFICATION: Apply the color {selected_color} (hex code) to the parts mentioned in the user's request. Ensure accurate color matching to this exact hex value."
     
     # CRITICAL DOCUMENTATION FINDING: Gemini 3 prefers natural language over complex templates
     # Source: Official Gemini docs emphasize "Be descriptive, not repetitive"
@@ -83,7 +89,7 @@ CRITICAL FOCUS AREAS FOR JUMP ROPE PRODUCTS:
 
 USER'S REQUEST:
 {user_prompt}
-Everything else must remain identical to the references.{variation_instruction}
+Everything else must remain identical to the references.{color_instruction}{variation_instruction}
 
 WHAT TO PRESERVE:
 Everything except what the user explicitly requests to change. This includes:
@@ -189,10 +195,11 @@ Remember: Gemini 3 Pro Image excels at text rendering and detail preservation. B
     except Exception as e:
         logger.error(f"Error in prompt refinement: {e}")
         # Fallback: return enhanced user prompt
-        return f"Based on the uploaded reference images, {user_prompt}. Maintain all physical characteristics exactly as shown. Professional studio photography, clean product."
+        color_fallback = f" Use color {selected_color}." if selected_color else ""
+        return f"Based on the uploaded reference images, {user_prompt}.{color_fallback} Maintain all physical characteristics exactly as shown. Professional studio photography, clean product."
 
 
-def generate_image(user_prompt, image_paths, variation_number=None, base_seed=42, resolution="1K", aspect_ratio="16:9"):
+def generate_image(user_prompt, image_paths, variation_number=None, base_seed=42, resolution="1K", aspect_ratio="16:9", selected_color=None):
     """
     Generate image using Gemini 3 Pro Image with CONSISTENCY controls
     
@@ -203,6 +210,7 @@ def generate_image(user_prompt, image_paths, variation_number=None, base_seed=42
         base_seed: Base seed for reproducibility (same seed = similar results)
         resolution: Image resolution (1K, 2K, 4K)
         aspect_ratio: Aspect ratio (16:9, 1:1, etc.)
+        selected_color: Hex color code selected by user
     """
     
     if not user_prompt or not user_prompt.strip():
@@ -216,8 +224,8 @@ def generate_image(user_prompt, image_paths, variation_number=None, base_seed=42
     if len(image_paths) > 10:
         image_paths = image_paths[:10]
     
-    # CRITICAL: Generate refined prompt with controlled variation
-    refined_prompt = refine_prompt(user_prompt, variation_number=variation_number)
+    # CRITICAL: Generate refined prompt with controlled variation and color
+    refined_prompt = refine_prompt(user_prompt, variation_number=variation_number, selected_color=selected_color)
     
     # FIX: Create temporary copies of images for this thread to avoid file conflicts
     temp_images = []
@@ -295,7 +303,7 @@ def generate_image(user_prompt, image_paths, variation_number=None, base_seed=42
         return None
 
 
-def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session=None, resolution="1K", aspect_ratio="16:9"):
+def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session=None, resolution="1K", aspect_ratio="16:9", selected_color=None):
     """
     Generate/edit image using Gemini 3 Pro Image with multi-turn chat support.
     This maintains context across edits using thought signatures (handled automatically by SDK).
@@ -307,6 +315,7 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
         chat_session: Existing chat session (None for first turn)
         resolution: Image resolution (1K, 2K, 4K)
         aspect_ratio: Aspect ratio (16:9, 1:1, etc.)
+        selected_color: Hex color code selected by user
     
     Returns:
         tuple: (output_path, client, chat_session) - path to saved image, client, and chat session for next turn
@@ -349,7 +358,7 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
             logger.info("✓ Chat session created successfully")
             
             # First turn: include reference images with refined prompt
-            refined_prompt = refine_prompt(user_prompt, variation_number=None)
+            refined_prompt = refine_prompt(user_prompt, variation_number=None, selected_color=selected_color)
             logger.info(f"📝 Refined prompt (first turn): {len(refined_prompt)} chars")
             
             # Load reference images
@@ -375,7 +384,9 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
             # The chat context (including previous images) is maintained via thought signatures
             logger.info("🔄 Continuing existing chat session (multi-turn edit)")
             message_content = user_prompt
-            logger.info(f"📤 Sending edit instruction: {user_prompt[:100]}...")
+            if selected_color:
+                message_content = f"{user_prompt} Use color {selected_color} (hex code)."
+            logger.info(f"📤 Sending edit instruction: {message_content[:100]}...")
         
         # Send message and get response
         response = chat_session.send_message(message_content)
@@ -400,7 +411,7 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
         logger.error(traceback.format_exc())
         return None, client, None  # RETURN 3 VALUES
     
-def generate_multiple_images(user_prompt, image_paths, count=3, base_seed=42, resolution="1K", aspect_ratio="16:9"):
+def generate_multiple_images(user_prompt, image_paths, count=3, base_seed=42, resolution="1K", aspect_ratio="16:9", selected_color=None):
     """
     Generates multiple images with CONTROLLED variation.
     Each image uses the same base prompt with minor controlled tweaks.
@@ -423,7 +434,8 @@ def generate_multiple_images(user_prompt, image_paths, count=3, base_seed=42, re
                 variation_number=i,
                 base_seed=base_seed,
                 resolution=resolution,
-                aspect_ratio=aspect_ratio
+                aspect_ratio=aspect_ratio,
+                selected_color=selected_color
             ) 
             for i in range(count)
         ]
@@ -487,8 +499,23 @@ if 'edit_history' not in st.session_state:
 if 'show_edit_field' not in st.session_state:
     st.session_state.show_edit_field = False
 
+if 'selected_color' not in st.session_state:
+    st.session_state.selected_color = None
+
 st.title("🎯 Product Image Generator")
 st.caption("Transform your product with AI")
+
+# Color Picker
+st.subheader("🎨 Color Selection")
+col_color1, col_color2 = st.columns([3, 1])
+
+with col_color1:
+    selected_color = st.color_picker("Pick a color for your product", "#FF5733")
+    st.session_state.selected_color = selected_color
+
+st.caption(f"Selected Color: {selected_color}")
+
+st.divider()
 
 # Image settings
 col_settings1, col_settings2 = st.columns(2)
@@ -523,7 +550,7 @@ st.divider()
 prompt = st.text_area(
     "Describe what you want to change:", 
     height=100,
-    placeholder="Example: Change the rope and handles to matte black finish"
+    placeholder="Example: Change the rope and handles to the selected color with matte finish"
 )
 
 folder_path = "gemini_images"
@@ -533,18 +560,20 @@ if not image_paths:
     st.warning("⚠️ No reference images found in 'gemini_images' folder.")
     logger.error("⚠️ No reference images found in 'gemini_images' folder.")
 else:
-    st.info(f"✅ {len(image_paths)} reference images loaded")
     logger.info(f"✅ {len(image_paths)} reference images loaded")
 
 col1, col2 = st.columns([1, 1])
 
 with col1:
     if st.button("🎨 Generate Single Image", type="primary", use_container_width=True):
-        if prompt and image_paths:
+        if not st.session_state.selected_color:
+            st.warning("⚠️ Please select a color first.")
+        elif prompt and image_paths:
             with st.spinner("Generating image..."):
                 logger.info("="*60)
                 logger.info("🚀 SINGLE IMAGE GENERATION STARTED")
                 logger.info(f"📝 User prompt: {prompt}")
+                logger.info(f"🎨 Selected color: {st.session_state.selected_color}")
                 logger.info(f"🖼️ Reference images: {len(image_paths)}")
                 logger.info(f"📐 Resolution: {resolution}, Aspect: {aspect_ratio}")
                 
@@ -552,9 +581,10 @@ with col1:
                     prompt, 
                     image_paths,
                     client=None,
-                    chat_session=None,  # Start fresh
+                    chat_session=None,
                     resolution=resolution,
-                    aspect_ratio=aspect_ratio
+                    aspect_ratio=aspect_ratio,
+                    selected_color=st.session_state.selected_color
                 )
                 
                 if result_path:
@@ -603,11 +633,14 @@ with col1:
             
             with edit_col1:
                 if st.button("✏️ Apply Edit", type="primary", use_container_width=True):
-                    if edit_prompt:
+                    if not st.session_state.selected_color:
+                        st.warning("⚠️ Please select a color first.")
+                    elif edit_prompt:
                         with st.spinner("Editing image..."):
                             logger.info("="*60)
                             logger.info("✏️ MULTI-TURN EDIT STARTED")
                             logger.info(f"📝 Edit instruction: {edit_prompt}")
+                            logger.info(f"🎨 Selected color: {st.session_state.selected_color}")
                             logger.info(f"🔄 Edit number: {len(st.session_state.edit_history) + 1}")
                             
                             result_path, updated_client, updated_chat = generate_image_with_chat(
@@ -616,7 +649,8 @@ with col1:
                                 client=st.session_state.client,
                                 chat_session=st.session_state.chat_session,
                                 resolution=resolution,
-                                aspect_ratio=aspect_ratio
+                                aspect_ratio=aspect_ratio,
+                                selected_color=st.session_state.selected_color
                             )
                             
                             if result_path:
@@ -660,11 +694,14 @@ with col1:
 
 with col2:
     if st.button("🎨 Generate 3 Variations", type="primary", use_container_width=True):
-        if prompt and image_paths:
+        if not st.session_state.selected_color:
+            st.warning("⚠️ Please select a color first.")
+        elif prompt and image_paths:
             with st.spinner("Generating 3 variations..."):
                 logger.info("="*60)
                 logger.info("🎨 MULTI-VARIATION GENERATION STARTED")
                 logger.info(f"📝 User prompt: {prompt}")
+                logger.info(f"🎨 Selected color: {st.session_state.selected_color}")
                 logger.info(f"🔢 Variations: 3")
                 
                 result_paths = generate_multiple_images(
@@ -673,7 +710,8 @@ with col2:
                     count=3,
                     base_seed=st.session_state.base_seed,
                     resolution=resolution,
-                    aspect_ratio=aspect_ratio
+                    aspect_ratio=aspect_ratio,
+                    selected_color=st.session_state.selected_color
                 )
                 
                 if result_paths:
