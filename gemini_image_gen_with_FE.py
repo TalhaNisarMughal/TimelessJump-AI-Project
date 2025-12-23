@@ -409,40 +409,71 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
                 color_instruction = f" Apply the color {selected_color} to the specified parts."
             
             refined_prompt = f"""
-<reference_analysis>
-Study the {len(loaded_images)} uploaded reference images thoroughly:
-- Handle design: 6.3 inches (16 cm) length, approximately 0.9 inches (23 mm) diameter
-- Grip textures and surface details
-- Text, logos, and branding placement
-- Rope/cable construction and material type
-- Color schemes and material finishes
-- Overall product proportions and scale
-</reference_analysis>
+<critical_reference_analysis>
+PRIORITY INSTRUCTIONS - Handle & Logo Fidelity:
+You have {len(loaded_images)} reference images. ONE of these images is a DEDICATED LOGO REFERENCE showing brand text and graphics in isolation.
+
+MANDATORY REQUIREMENTS:
+1. HANDLE DESIGN (HIGHEST PRIORITY):
+   - Exact dimensions: 6.3 inches (16 cm) length × 0.9 inches (23 mm) diameter
+   - Preserve every surface texture, grip pattern, and material finish
+   - Maintain exact handle shape and ergonomic contours
+   
+2. LOGO & TEXT PLACEMENT (CRITICAL - DO NOT DEVIATE):
+   - Study the standalone logo reference image with EXTREME attention
+   - Reproduce logo positioning EXACTLY as shown on handles
+   - Maintain identical font styles, sizes, and letter spacing
+   - Preserve all text orientations and placement angles
+   - Keep logo colors, gradients, and opacity PRECISELY as reference
+   - Replicate any embossing, engraving, or texture on text/logos
+   - Maintain spatial relationship between multiple logos if present
+
+3. BRANDING ELEMENTS:
+   - Copy every detail: wordmarks, symbols, icons, decorative elements
+   - Preserve text hierarchy and visual weight
+   - Maintain any shadows, highlights, or dimensional effects on logos
+   - Keep exact contrast ratios between text and handle surface
+
+4. ROPE/CABLE CONSTRUCTION:
+   - Material type and texture from reference
+   - Cable thickness and construction style
+   - Connection points to handles
+   - Dont make it too long or too short
+</critical_reference_analysis>
 
 <user_request>
 {user_prompt}{color_instruction}
 </user_request>
 
 <generation_specifications>
-Subject: Professional jump rope product with handles measuring 6.3" × 0.9" diameter
+Subject: Professional jump rope product featuring handles (6.3" L × 0.9" dia.) with EXACT branding from reference
 
-Composition: Three-quarter angle view, 45-degree perspective, product positioned center-frame
+Composition & Framing:
+- Three-quarter product view at 45-degree angle
+- Handles prominently displayed to showcase logo placement
+- Product centered in frame with optimal logo visibility
+- Ensure all branded surfaces are clearly visible and readable
 
-Style: Commercial product photography, clean and professional
+Visual Style: High-end commercial product photography
 
-Camera & Lighting:
-- 85mm lens equivalent focal length
-- Three-point studio lighting setup with soft shadows
-- Highlight rim lighting on handles to emphasize texture
-- Clean white background (RGB 255,255,255)
+Camera & Lighting Setup:
+- 85mm lens equivalent for natural proportions
+- Three-point studio lighting optimized for text/logo clarity
+- Key light positioned to eliminate glare on text surfaces
+- Fill light to reveal logo details in shadow areas
+- Rim lighting to accentuate handle edges and text dimensionality
+- Clean white background (RGB 255, 255, 255) for maximum contrast
 
-Technical Requirements:
-- Maintain ALL physical characteristics from reference images
-- Preserve handle dimensions: 6.3 inches length, 0.9 inches diameter
-- Keep text, logos, and branding exactly as shown in references
-- Preserve rope construction and material appearance
-- Apply ONLY the changes explicitly requested by user
-- Output clean product image without watermarks or additional text
+Technical Constraints:
+1. Handle fidelity is NON-NEGOTIABLE - dimensions must be 6.3" × 0.9" diameter
+2. Logo/text placement is ABSOLUTE PRIORITY - replicate with 100% accuracy
+3. Study the dedicated logo reference image before generating
+4. Preserve ALL branding elements exactly as photographed
+5. Apply ONLY user-requested changes - everything else stays identical
+6. Output must be pristine: no watermarks, no additional text overlays
+7. Maintain professional product photography standards throughout
+
+Reasoning Mode: Enable "Thinking" mode to verify logo accuracy before final generation
 </generation_specifications>
 """
             
