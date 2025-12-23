@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 import logging
 import random
 import shutil
+import io
 
 load_dotenv()
 
@@ -306,7 +307,7 @@ def generate_image(user_prompt, image_paths, variation_number=None, base_seed=42
 def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session=None, resolution="1K", aspect_ratio="16:9", selected_color=None):
     """
     Generate/edit image using Gemini 3 Pro Image with multi-turn chat support.
-    EXPLICITLY loads and sends all reference images to the model.
+    EXPLICITLY loads and sends all reference images to the model using BytesIO.
     
     Args:
         user_prompt: User's description of desired changes
@@ -324,6 +325,8 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
     if not user_prompt or not user_prompt.strip():
         logger.error("❌ Empty user prompt provided")
         return None, client, None
+    
+    loaded_images = []  # Track loaded images for cleanup
     
     try:
         # Create client ONCE if not provided
@@ -348,8 +351,7 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
             
             logger.info(f"📂 Attempting to load {len(image_paths)} reference images:")
             
-            # EXPLICITLY LOAD ALL REFERENCE IMAGES
-            loaded_images = []
+            # EXPLICITLY LOAD ALL REFERENCE IMAGES USING BYTESIO
             for idx, path in enumerate(image_paths, 1):
                 try:
                     # Check if file exists
@@ -361,8 +363,22 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
                     file_size = os.path.getsize(path) / (1024 * 1024)  # Size in MB
                     logger.info(f"  📸 Image {idx}: {os.path.basename(path)} ({file_size:.2f} MB)")
                     
-                    # Load the image using PIL
-                    img = Image.open(path)
+                    # Read file into memory buffer
+                    with open(path, 'rb') as f:
+                        image_bytes = f.read()
+                    
+                    # Create BytesIO buffer
+                    buffer = io.BytesIO(image_bytes)
+                    
+                    # Load the image from buffer
+                    img = Image.open(buffer)
+                    img.load()  # Force load pixel data NOW
+                    
+                    # Verify image is loaded
+                    if img.im is None:
+                        logger.error(f"  ❌ Image {idx}: Failed to load pixel data")
+                        img.close()
+                        continue
                     
                     # Log image properties
                     logger.info(f"      ✓ Loaded: {img.size[0]}x{img.size[1]} pixels, mode: {img.mode}")
@@ -411,13 +427,35 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
             refined_prompt = f"""
 <reference_analysis>
 Study the {len(loaded_images)} uploaded reference images thoroughly:
-- Handle design: 6.3 inches (16 cm) length, approximately 0.9 inches (23 mm) diameter
-- Grip textures and surface details
+The Timeless Jump Rope handles have a length of 6.3 inches (approximately 16 cm).
+Handle Specifications
+Length: The handles are 6.3 inches long.
+
+other similar freestyle jump ropes often have a handle diameter of approximately 0.9 inches (about 23 mm)- Grip textures and surface details
 - Text, logos, and branding placement
 - Rope/cable construction and material type
 - Color schemes and material finishes
 - Overall product proportions and scale
 </reference_analysis>
+
+🚨 CRITICAL REQUIREMENTS - NON-NEGOTIABLE - VERIFY BEFORE GENERATION 🚨
+
+1. ⚠️ HANDLE ACCURACY: The handle design MUST be PIXEL-PERFECT replica of reference images
+   - Every groove, texture, curve, and surface detail must match EXACTLY
+   - Zero deviation allowed in shape, proportions, or styling
+   - If uncertain, default to reference image accuracy over creative interpretation
+
+2. ⚠️ LOGO PLACEMENT & ORIENTATION: Logo positioning is ABSOLUTE
+   - Logo must align precisely with handle's directional axis
+   - Rotation and perspective must match the handle's 3D orientation
+   - Wrong logo direction = FAILED generation
+
+3. ⚠️ TEXT DIRECTION & READABILITY: All text must be spatially correct
+   - Text orientation must correspond exactly to handle direction
+   - Text must be readable from the same viewing angle as the handle
+   - Upside-down or sideways text is UNACCEPTABLE
+
+⚠️ IF ANY OF THESE REQUIREMENTS CANNOT BE MET EXACTLY, DO NOT GENERATE ⚠️
 
 <user_request>
 {user_prompt}{color_instruction}
@@ -512,6 +550,16 @@ Technical Requirements:
                     logger.info(f"💾 Image saved successfully:")
                     logger.info(f"   Path: {output_path}")
                     
+                    # CLEANUP: Close all loaded reference images
+                    if loaded_images:
+                        logger.info(f"🧹 Closing {len(loaded_images)} reference images...")
+                        for img in loaded_images:
+                            try:
+                                img.close()
+                            except Exception as cleanup_error:
+                                logger.warning(f"   ⚠️ Error closing image: {cleanup_error}")
+                        logger.info("   ✅ All reference images closed")
+                    
                     return output_path, client, chat_session
                     
                 except Exception as e:
@@ -531,6 +579,16 @@ Technical Requirements:
             logger.error("   3. Model encountered an error during generation")
             logger.info("="*80)
         
+        # CLEANUP: Close images even if generation failed
+        if loaded_images:
+            logger.info(f"🧹 Closing {len(loaded_images)} reference images (no image generated)...")
+            for img in loaded_images:
+                try:
+                    img.close()
+                except Exception as cleanup_error:
+                    logger.warning(f"   ⚠️ Error closing image: {cleanup_error}")
+            logger.info("   ✅ All reference images closed")
+        
         return None, client, chat_session
     
     except Exception as e:
@@ -543,8 +601,20 @@ Technical Requirements:
         logger.error("Full traceback:")
         logger.error(traceback.format_exc())
         logger.info("="*80)
-        return None, client, None
         
+        # CLEANUP: Close images even on exception
+        if loaded_images:
+            logger.info(f"🧹 Closing {len(loaded_images)} reference images (exception occurred)...")
+            for img in loaded_images:
+                try:
+                    img.close()
+                except Exception as cleanup_error:
+                    logger.warning(f"   ⚠️ Error closing image: {cleanup_error}")
+            logger.info("   ✅ All reference images closed")
+        
+        return None, client, None
+
+
 def generate_multiple_images(user_prompt, image_paths, count=3, base_seed=42, resolution="1K", aspect_ratio="16:9", selected_color=None):
     """
     Generates multiple images with CONTROLLED variation.
