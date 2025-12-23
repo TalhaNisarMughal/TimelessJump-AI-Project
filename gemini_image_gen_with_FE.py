@@ -306,7 +306,7 @@ def generate_image(user_prompt, image_paths, variation_number=None, base_seed=42
 def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session=None, resolution="1K", aspect_ratio="16:9", selected_color=None):
     """
     Generate/edit image using Gemini 3 Pro Image with multi-turn chat support.
-    This maintains context across edits using thought signatures (handled automatically by SDK).
+    EXPLICITLY loads and sends all reference images to the model.
     
     Args:
         user_prompt: User's description of desired changes
@@ -322,7 +322,7 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
     """
     
     if not user_prompt or not user_prompt.strip():
-        logger.error("Empty user prompt provided")
+        logger.error("❌ Empty user prompt provided")
         return None, client, None
     
     try:
@@ -333,17 +333,62 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
         
         # Create new chat session if this is the first turn
         if chat_session is None:
-            logger.info("🆕 Initializing new multi-turn chat session")
+            logger.info("="*80)
+            logger.info("🆕 INITIALIZING NEW MULTI-TURN CHAT SESSION")
+            logger.info("="*80)
             
             if not image_paths or len(image_paths) == 0:
-                logger.error("No image paths provided for initial generation")
+                logger.error("❌ No image paths provided for initial generation")
                 return None, client, None
             
+            # Limit to 10 images
             if len(image_paths) > 10:
+                logger.warning(f"⚠️ Limiting from {len(image_paths)} to 10 reference images")
                 image_paths = image_paths[:10]
-                logger.info(f"Limiting to first 10 reference images")
             
-            # Create chat with config - using the PERSISTENT client
+            logger.info(f"📂 Attempting to load {len(image_paths)} reference images:")
+            
+            # EXPLICITLY LOAD ALL REFERENCE IMAGES
+            loaded_images = []
+            for idx, path in enumerate(image_paths, 1):
+                try:
+                    # Check if file exists
+                    if not os.path.exists(path):
+                        logger.error(f"  ❌ Image {idx}: File not found at {path}")
+                        continue
+                    
+                    # Check file size
+                    file_size = os.path.getsize(path) / (1024 * 1024)  # Size in MB
+                    logger.info(f"  📸 Image {idx}: {os.path.basename(path)} ({file_size:.2f} MB)")
+                    
+                    # Load the image using PIL
+                    img = Image.open(path)
+                    
+                    # Log image properties
+                    logger.info(f"      ✓ Loaded: {img.size[0]}x{img.size[1]} pixels, mode: {img.mode}")
+                    
+                    # Add to list
+                    loaded_images.append(img)
+                    
+                except Exception as e:
+                    logger.error(f"  ❌ Image {idx}: Failed to load - {str(e)}")
+                    import traceback
+                    logger.error(f"      {traceback.format_exc()}")
+            
+            if not loaded_images:
+                logger.error("❌ CRITICAL: No images could be loaded successfully!")
+                return None, client, None
+            
+            logger.info(f"✅ Successfully loaded {len(loaded_images)}/{len(image_paths)} reference images")
+            logger.info("-"*80)
+            
+            # Create chat with config
+            logger.info("🔧 Creating chat session with configuration:")
+            logger.info(f"   Model: gemini-3-pro-image-preview")
+            logger.info(f"   Resolution: {resolution}")
+            logger.info(f"   Aspect Ratio: {aspect_ratio}")
+            logger.info(f"   Temperature: 1.0")
+            
             chat_session = client.chats.create(
                 model="gemini-3-pro-image-preview",
                 config=types.GenerateContentConfig(
@@ -355,62 +400,151 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
                     )
                 )
             )
-            logger.info("✓ Chat session created successfully")
+            logger.info("✅ Chat session created successfully")
+            logger.info("-"*80)
             
-            # First turn: include reference images with refined prompt
-            refined_prompt = refine_prompt(user_prompt, variation_number=None, selected_color=selected_color)
-            logger.info(f"📝 Refined prompt (first turn): {len(refined_prompt)} chars")
+            # Build the refined prompt
+            color_instruction = ""
+            if selected_color:
+                color_instruction = f" Apply the color {selected_color} to the specified parts."
             
-            # Load reference images
-            images = []
-            for path in image_paths:
-                try:
-                    img = Image.open(path)
-                    images.append(img)
-                    logger.info(f"✓ Loaded reference: {os.path.basename(path)}")
-                except Exception as e:
-                    logger.error(f"✗ Failed to load {path}: {e}")
+            refined_prompt = f"""
+<reference_analysis>
+Study the {len(loaded_images)} uploaded reference images thoroughly:
+- Handle design: 6.3 inches (16 cm) length, approximately 0.9 inches (23 mm) diameter
+- Grip textures and surface details
+- Text, logos, and branding placement
+- Rope/cable construction and material type
+- Color schemes and material finishes
+- Overall product proportions and scale
+</reference_analysis>
+
+<user_request>
+{user_prompt}{color_instruction}
+</user_request>
+
+<generation_specifications>
+Subject: Professional jump rope product with handles measuring 6.3" × 0.9" diameter
+
+Composition: Three-quarter angle view, 45-degree perspective, product positioned center-frame
+
+Style: Commercial product photography, clean and professional
+
+Camera & Lighting:
+- 85mm lens equivalent focal length
+- Three-point studio lighting setup with soft shadows
+- Highlight rim lighting on handles to emphasize texture
+- Clean white background (RGB 255,255,255)
+
+Technical Requirements:
+- Maintain ALL physical characteristics from reference images
+- Preserve handle dimensions: 6.3 inches length, 0.9 inches diameter
+- Keep text, logos, and branding exactly as shown in references
+- Preserve rope construction and material appearance
+- Apply ONLY the changes explicitly requested by user
+- Output clean product image without watermarks or additional text
+</generation_specifications>
+"""
             
-            if not images:
-                logger.error("No images could be loaded")
-                return None, client, None
+            logger.info("📝 Refined prompt created:")
+            logger.info(f"   Length: {len(refined_prompt)} characters")
+            logger.info(f"   Preview: {refined_prompt[:200]}...")
+            logger.info("-"*80)
             
-            # Send message with prompt + images
-            message_content = [refined_prompt] + images
-            logger.info(f"📤 Sending first turn (1 prompt + {len(images)} images)")
+            # CRITICAL: Build message content with prompt FIRST, then ALL images
+            message_content = [refined_prompt] + loaded_images
+            
+            logger.info("📤 SENDING FIRST MESSAGE TO MODEL:")
+            logger.info(f"   Content parts: 1 text prompt + {len(loaded_images)} images")
+            logger.info(f"   Total message parts: {len(message_content)}")
+            
+            # Verify each part
+            for idx, part in enumerate(message_content):
+                if isinstance(part, str):
+                    logger.info(f"   Part {idx}: TEXT ({len(part)} chars)")
+                elif isinstance(part, Image.Image):
+                    logger.info(f"   Part {idx}: IMAGE ({part.size[0]}x{part.size[1]}, {part.mode})")
+                else:
+                    logger.info(f"   Part {idx}: {type(part)}")
+            
+            logger.info("-"*80)
+            logger.info("⏳ Waiting for model response...")
             
         else:
             # Subsequent turns: just send the edit instruction
-            # The chat context (including previous images) is maintained via thought signatures
-            logger.info("🔄 Continuing existing chat session (multi-turn edit)")
+            logger.info("="*80)
+            logger.info("🔄 CONTINUING EXISTING CHAT SESSION (MULTI-TURN EDIT)")
+            logger.info("="*80)
+            
             message_content = user_prompt
             if selected_color:
-                message_content = f"{user_prompt} Use color {selected_color} (hex code)."
-            logger.info(f"📤 Sending edit instruction: {message_content[:100]}...")
+                message_content = f"{user_prompt} Apply color {selected_color}."
+            
+            logger.info(f"📤 Sending edit instruction: {message_content}")
+            logger.info("   (Reference images maintained via chat context)")
+            logger.info("-"*80)
+            logger.info("⏳ Waiting for model response...")
         
         # Send message and get response
         response = chat_session.send_message(message_content)
-        logger.info("✓ Response received from model")
+        logger.info("✅ Response received from model")
+        logger.info("-"*80)
         
-        # Save the generated image
-        output_path = f"generated_jump_rope_{uuid.uuid4().hex[:8]}.png"
+        # Parse and save the generated image
+        logger.info("🔍 Parsing response parts:")
+        image_found = False
         
-        for part in response.parts:
+        for idx, part in enumerate(response.parts):
+            logger.info(f"   Part {idx}: {type(part).__name__}")
+            
             if part.inline_data is not None:
-                image = part.as_image()
-                image.save(output_path)
-                logger.info(f"💾 Saved image: {output_path}")
-                return output_path, client, chat_session  # RETURN 3 VALUES
+                logger.info(f"      ✓ Found inline image data!")
+                image_found = True
+                
+                try:
+                    # Extract and save image
+                    image = part.as_image()
+                    output_path = f"generated_jump_rope_{uuid.uuid4().hex[:8]}.png"
+                    image.save(output_path)
+                    
+                    # Verify saved file
+                    saved_size = os.path.getsize(output_path) / (1024 * 1024)
+                    logger.info(f"💾 Image saved successfully:")
+                    logger.info(f"   Path: {output_path}")
+                    
+                    return output_path, client, chat_session
+                    
+                except Exception as e:
+                    logger.error(f"❌ Failed to save image: {str(e)}")
+                    import traceback
+                    logger.error(traceback.format_exc())
+            
+            elif hasattr(part, 'text') and part.text:
+                logger.info(f"      Text content: {part.text[:100]}...")
         
-        logger.error("❌ No image data in response")
-        return None, client, chat_session  # RETURN 3 VALUES
+        if not image_found:
+            logger.error("❌ NO IMAGE DATA FOUND IN RESPONSE")
+            logger.error("   This suggests the model did not generate an image.")
+            logger.error("   Possible causes:")
+            logger.error("   1. Reference images were not properly received by model")
+            logger.error("   2. Prompt was unclear or conflicting")
+            logger.error("   3. Model encountered an error during generation")
+            logger.info("="*80)
+        
+        return None, client, chat_session
     
     except Exception as e:
-        logger.error(f"❌ Error in chat generation: {e}")
+        logger.error("="*80)
+        logger.error(f"❌ CRITICAL ERROR IN CHAT GENERATION")
+        logger.error(f"Error type: {type(e).__name__}")
+        logger.error(f"Error message: {str(e)}")
+        logger.error("-"*80)
         import traceback
+        logger.error("Full traceback:")
         logger.error(traceback.format_exc())
-        return None, client, None  # RETURN 3 VALUES
-    
+        logger.info("="*80)
+        return None, client, None
+        
 def generate_multiple_images(user_prompt, image_paths, count=3, base_seed=42, resolution="1K", aspect_ratio="16:9", selected_color=None):
     """
     Generates multiple images with CONTROLLED variation.
