@@ -20,6 +20,20 @@ logger = logging.getLogger(__name__)
 
 GEMINI_API_KEY = os.getenv("GEMINI_KEY")
 
+image_content = []
+count = 0
+def load_images(images_path):
+    global count
+    if count==0:
+        for image_path in images_path:
+            img = Image.open(image_path)
+            img.load()
+            image_content.append(img)
+            logger.info(f"✓ Loaded: {os.path.basename(image_path)}")
+
+        if len(image_content) > 0:
+            count = 1
+
 def refine_prompt(user_prompt, variation_number=None, selected_color=None):
     """
     Refine user prompts for Gemini 3 Pro Image generation with MAXIMUM CONSISTENCY.
@@ -52,7 +66,7 @@ def refine_prompt(user_prompt, variation_number=None, selected_color=None):
     ]
     
     variation_instruction = ""
-    if variation_number is not None and variation_number > 0:
+    if variation_number is not None :
         var_idx = variation_number % len(minimal_variations)
         if minimal_variations[var_idx]:
             variation_instruction = f"\n\nMINOR ADJUSTMENT: {minimal_variations[var_idx]}. This is the ONLY change allowed."
@@ -139,44 +153,42 @@ Remember: Gemini 3 Pro Image excels at text rendering and detail preservation. B
     try:
         import os
         import glob
-        
-        contents = [system_instruction]
-        
-        # Load reference images (max 14 for Gemini 3 Pro)
-        if reference_images_folder and os.path.isdir(reference_images_folder):
-            import PIL.Image
-            
-            image_extensions = ['*.jpg', '*.jpeg', '*.png', '*.webp']
-            image_files = []
-            for ext in image_extensions:
-                image_files.extend(glob.glob(os.path.join(reference_images_folder, ext)))
-            
-            # Limit to 14 images (official Gemini 3 Pro limit)
-            image_files = sorted(image_files)[:14]
-            
-            if image_files:
-                logger.info(f"Loading {len(image_files)} reference images...")
-                for img_path in image_files:
-                    try:
-                        img = PIL.Image.open(img_path)
-                        contents.append(img)
-                        logger.info(f"✓ Loaded: {os.path.basename(img_path)}")
-                    except Exception as e:
-                        logger.error(f"✗ Error loading {img_path}: {e}")
+        try:
+            contents = [system_instruction] + image_content
+            logger.info("Content loaded with images")
+        except :
+            contents = [system_instruction]
+            logger.info("Content loaded without images")
+
+        logger.info("Data sent to 2.5 pro\n")
+        logger.info(contents)
         
         client = genai.Client(api_key=GEMINI_API_KEY)
         
         # CRITICAL FIX: Use gemini-2.5-flash for prompt refinement
         # (Gemini 3 Pro Image is for the actual image generation, not prompt refinement)
-        response = client.models.generate_content(
-            model="gemini-2.5-pro",
-            contents=contents,
-            config=types.GenerateContentConfig(
-                temperature=0.5,  # Lower for more consistency
-                top_p=0.85,       # Reduced for deterministic outputs
-                top_k=30          # Tighter token selection
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    temperature=0.5,  # Lower for more consistency
+                    top_p=0.85,       # Reduced for deterministic outputs
+                    top_k=30          # Tighter token selection
+                )
             )
-        )
+
+        except Exception as e:
+            logger.warning(f"Image failed, retrying text-only: {e}")
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[system_instruction],
+                config=types.GenerateContentConfig(
+                    temperature=0.5,  # Lower for more consistency
+                    top_p=0.85,       # Reduced for deterministic outputs
+                    top_k=30          # Tighter token selection
+                )
+            )
         
         refined = response.text.strip()
         
@@ -228,39 +240,11 @@ def generate_image(user_prompt, image_paths, variation_number=None, base_seed=42
     # CRITICAL: Generate refined prompt with controlled variation and color
     refined_prompt = refine_prompt(user_prompt, variation_number=variation_number, selected_color=selected_color)
     
-    # FIX: Create temporary copies of images for this thread to avoid file conflicts
-    temp_images = []
-    thread_id = uuid.uuid4().hex[:8]
-    
-    for idx, path in enumerate(image_paths):
-        try:
-            # Create a temporary copy with unique name
-            temp_path = f"temp_{thread_id}_{idx}_{os.path.basename(path)}"
-            shutil.copy2(path, temp_path)
-            
-            # Load from the temporary copy
-            img = Image.open(temp_path)
-            temp_images.append(img)
-            
-            # Clean up the temporary file immediately after loading
-            try:
-                os.remove(temp_path)
-            except:
-                pass
-                
-        except Exception as e:
-            logger.error(f"Failed to load image {path}: {e}")
-            pass
-    
-    if not temp_images:
-        logger.error("No images could be loaded")
-        return None
-    
     try:
         client = genai.Client(api_key=GEMINI_API_KEY)
         
         # IMPORTANT: Reference images MUST be included in generation contents
-        contents = [refined_prompt] + temp_images
+        contents = [refined_prompt] + image_content
         
         # Calculate deterministic seed for this variation
         if variation_number is not None:
@@ -273,15 +257,11 @@ def generate_image(user_prompt, image_paths, variation_number=None, base_seed=42
         
         # CRITICAL: Add consistency parameters
         response = client.models.generate_content(
-            model="gemini-3-pro-image-preview",
+            model="gemini-2.5-flash-image",
             contents=contents,
             config=types.GenerateContentConfig(
                 response_modalities=['TEXT', 'IMAGE'],
                 temperature=1.0,  # Keep at 1.0 (Google's recommendation for Gemini 3)
-                image_config=types.ImageConfig(
-                    aspect_ratio=aspect_ratio,
-                    image_size=resolution
-                )
             )
         )
         
@@ -325,8 +305,7 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
     if not user_prompt or not user_prompt.strip():
         logger.error("❌ Empty user prompt provided")
         return None, client, None
-    
-    loaded_images = []  # Track loaded images for cleanup
+  # Track loaded images for cleanup
     
     try:
         # Create client ONCE if not provided
@@ -340,64 +319,6 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
             logger.info("🆕 INITIALIZING NEW MULTI-TURN CHAT SESSION")
             logger.info("="*80)
             
-            if not image_paths or len(image_paths) == 0:
-                logger.error("❌ No image paths provided for initial generation")
-                return None, client, None
-            
-            # Limit to 10 images
-            if len(image_paths) > 10:
-                logger.warning(f"⚠️ Limiting from {len(image_paths)} to 10 reference images")
-                image_paths = image_paths[:10]
-            
-            logger.info(f"📂 Attempting to load {len(image_paths)} reference images:")
-            
-            # EXPLICITLY LOAD ALL REFERENCE IMAGES USING BYTESIO
-            for idx, path in enumerate(image_paths, 1):
-                try:
-                    # Check if file exists
-                    if not os.path.exists(path):
-                        logger.error(f"  ❌ Image {idx}: File not found at {path}")
-                        continue
-                    
-                    # Check file size
-                    file_size = os.path.getsize(path) / (1024 * 1024)  # Size in MB
-                    logger.info(f"  📸 Image {idx}: {os.path.basename(path)} ({file_size:.2f} MB)")
-                    
-                    # Read file into memory buffer
-                    with open(path, 'rb') as f:
-                        image_bytes = f.read()
-                    
-                    # Create BytesIO buffer
-                    buffer = io.BytesIO(image_bytes)
-                    
-                    # Load the image from buffer
-                    img = Image.open(buffer)
-                    img.load()  # Force load pixel data NOW
-                    
-                    # Verify image is loaded
-                    if img.im is None:
-                        logger.error(f"  ❌ Image {idx}: Failed to load pixel data")
-                        img.close()
-                        continue
-                    
-                    # Log image properties
-                    logger.info(f"      ✓ Loaded: {img.size[0]}x{img.size[1]} pixels, mode: {img.mode}")
-                    
-                    # Add to list
-                    loaded_images.append(img)
-                    
-                except Exception as e:
-                    logger.error(f"  ❌ Image {idx}: Failed to load - {str(e)}")
-                    import traceback
-                    logger.error(f"      {traceback.format_exc()}")
-            
-            if not loaded_images:
-                logger.error("❌ CRITICAL: No images could be loaded successfully!")
-                return None, client, None
-            
-            logger.info(f"✅ Successfully loaded {len(loaded_images)}/{len(image_paths)} reference images")
-            logger.info("-"*80)
-            
             # Create chat with config
             logger.info("🔧 Creating chat session with configuration:")
             logger.info(f"   Model: gemini-3-pro-image-preview")
@@ -406,14 +327,14 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
             logger.info(f"   Temperature: 1.0")
             
             chat_session = client.chats.create(
-                model="gemini-3-pro-image-preview",
+                model="gemini-2.5-flash-image",
                 config=types.GenerateContentConfig(
                     response_modalities=['TEXT', 'IMAGE'],
                     temperature=1.0,
-                    image_config=types.ImageConfig(
-                        aspect_ratio=aspect_ratio,
-                        image_size=resolution
-                    )
+                    # image_config=types.ImageConfig(
+                    #     aspect_ratio=aspect_ratio,
+                    #     image_size=resolution
+                    # )
                 )
             )
             logger.info("✅ Chat session created successfully")
@@ -423,77 +344,12 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
             color_instruction = ""
             if selected_color:
                 color_instruction = f" Apply the color {selected_color} to the specified parts."
-            
-            refined_prompt = f"""
-<reference_analysis>
-Study the {len(loaded_images)} uploaded reference images thoroughly:
-The Timeless Jump Rope handles have a length of 6.3 inches (approximately 16 cm).
-Handle Specifications
-Length: The handles are 6.3 inches long.
-
-other similar freestyle jump ropes often have a handle diameter of approximately 0.9 inches (about 23 mm)- Grip textures and surface details
-- Text, logos, and branding placement
-- Rope/cable construction and material type
-- Color schemes and material finishes
-- Overall product proportions and scale
-</reference_analysis>
-
-🚨 CRITICAL REQUIREMENTS - NON-NEGOTIABLE - VERIFY BEFORE GENERATION 🚨
-
-1. ⚠️ HANDLE ACCURACY: The handle design MUST be PIXEL-PERFECT replica of reference images
-   - Every groove, texture, curve, and surface detail must match EXACTLY
-   - Zero deviation allowed in shape, proportions, or styling
-   - If uncertain, default to reference image accuracy over creative interpretation
-
-2. ⚠️ LOGO PLACEMENT & ORIENTATION: Logo positioning is ABSOLUTE
-   - Logo must align precisely with handle's directional axis
-   - Rotation and perspective must match the handle's 3D orientation
-   - Wrong logo direction = FAILED generation
-
-3. ⚠️ TEXT DIRECTION & READABILITY: All text must be spatially correct
-   - Text orientation must correspond exactly to handle direction
-   - Text must be readable from the same viewing angle as the handle
-   - Upside-down or sideways text is UNACCEPTABLE
-
-⚠️ IF ANY OF THESE REQUIREMENTS CANNOT BE MET EXACTLY, DO NOT GENERATE ⚠️
-
-<user_request>
-{user_prompt}{color_instruction}
-</user_request>
-
-<generation_specifications>
-Subject: Professional jump rope product with handles measuring 6.3" × 0.9" diameter
-
-Composition: Three-quarter angle view, 45-degree perspective, product positioned center-frame
-
-Style: Commercial product photography, clean and professional
-
-Camera & Lighting:
-- 85mm lens equivalent focal length
-- Three-point studio lighting setup with soft shadows
-- Highlight rim lighting on handles to emphasize texture
-- Clean white background (RGB 255,255,255)
-
-Technical Requirements:
-- Maintain ALL physical characteristics from reference images
-- Preserve handle dimensions: 6.3 inches length, 0.9 inches diameter
-- Keep text, logos, and branding exactly as shown in references
-- Preserve rope construction and material appearance
-- Apply ONLY the changes explicitly requested by user
-- Output clean product image without watermarks or additional text
-</generation_specifications>
-"""
-            
-            logger.info("📝 Refined prompt created:")
-            logger.info(f"   Length: {len(refined_prompt)} characters")
-            logger.info(f"   Preview: {refined_prompt[:200]}...")
-            logger.info("-"*80)
-            
+            variation_1=None
+            refined_prompt = refine_prompt(user_prompt,variation_1,selected_color)
             # CRITICAL: Build message content with prompt FIRST, then ALL images
-            message_content = [refined_prompt] + loaded_images
+            message_content = [refined_prompt] + image_content
             
             logger.info("📤 SENDING FIRST MESSAGE TO MODEL:")
-            logger.info(f"   Content parts: 1 text prompt + {len(loaded_images)} images")
             logger.info(f"   Total message parts: {len(message_content)}")
             
             # Verify each part
@@ -528,7 +384,6 @@ Technical Requirements:
         logger.info("✅ Response received from model")
         logger.info("-"*80)
         
-        # Parse and save the generated image
         logger.info("🔍 Parsing response parts:")
         image_found = False
         
@@ -579,17 +434,11 @@ Technical Requirements:
             logger.error("   3. Model encountered an error during generation")
             logger.info("="*80)
         
-        # CLEANUP: Close images even if generation failed
-        if loaded_images:
-            logger.info(f"🧹 Closing {len(loaded_images)} reference images (no image generated)...")
-            for img in loaded_images:
-                try:
-                    img.close()
-                except Exception as cleanup_error:
-                    logger.warning(f"   ⚠️ Error closing image: {cleanup_error}")
-            logger.info("   ✅ All reference images closed")
+        # Parse and save the generated image
+        logger.info("🔍 Parsing response parts:")
         
-        return None, client, chat_session
+        # CLEANUP: Close images even if generation failed
+        return None , client, chat_session
     
     except Exception as e:
         logger.error("="*80)
@@ -603,15 +452,6 @@ Technical Requirements:
         logger.info("="*80)
         
         # CLEANUP: Close images even on exception
-        if loaded_images:
-            logger.info(f"🧹 Closing {len(loaded_images)} reference images (exception occurred)...")
-            for img in loaded_images:
-                try:
-                    img.close()
-                except Exception as cleanup_error:
-                    logger.warning(f"   ⚠️ Error closing image: {cleanup_error}")
-            logger.info("   ✅ All reference images closed")
-        
         return None, client, None
 
 
@@ -676,7 +516,6 @@ def get_images_from_folder(folder_path):
             image_paths.append(str(file))
     
     return sorted(image_paths)[:10]
-
 
 # --- Streamlit UI ---
 st.set_page_config(page_title="Product Image Generator", layout="wide")
@@ -759,6 +598,7 @@ prompt = st.text_area(
 
 folder_path = "gemini_images"
 image_paths = get_images_from_folder(folder_path)
+loaded_images = load_images(image_paths)
 
 if not image_paths:
     st.warning("⚠️ No reference images found in 'gemini_images' folder.")
@@ -783,7 +623,7 @@ with col1:
                 
                 result_path, updated_client, new_chat = generate_image_with_chat(
                     prompt, 
-                    image_paths,
+                    loaded_images,
                     client=None,
                     chat_session=None,
                     resolution=resolution,
