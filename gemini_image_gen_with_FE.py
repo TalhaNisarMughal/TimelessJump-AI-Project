@@ -257,7 +257,7 @@ def generate_image(user_prompt, image_paths, variation_number=None, base_seed=42
         
         # CRITICAL: Add consistency parameters
         response = client.models.generate_content(
-            model="gemini-2.5-flash-image",
+            model="gemini-3-pro-image-preview",
             contents=contents,
             config=types.GenerateContentConfig(
                 response_modalities=['TEXT', 'IMAGE'],
@@ -327,14 +327,14 @@ def generate_image_with_chat(user_prompt, image_paths, client=None, chat_session
             logger.info(f"   Temperature: 1.0")
             
             chat_session = client.chats.create(
-                model="gemini-2.5-flash-image",
+                model="gemini-3-pro-image-preview",
                 config=types.GenerateContentConfig(
                     response_modalities=['TEXT', 'IMAGE'],
                     temperature=1.0,
-                    # image_config=types.ImageConfig(
-                    #     aspect_ratio=aspect_ratio,
-                    #     image_size=resolution
-                    # )
+                    image_config=types.ImageConfig(
+                        aspect_ratio=aspect_ratio,
+                        image_size=resolution
+                    )
                 )
             )
             logger.info("✅ Chat session created successfully")
