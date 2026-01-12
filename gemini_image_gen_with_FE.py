@@ -24,52 +24,48 @@ logger = logging.getLogger(__name__)
 GEMINI_API_KEY = os.getenv("GEMINI_KEY")
 image_lock = threading.Lock()
 image_content = []
-count = 0
+def load_images(images_path):
+
+    for image_path in images_path:
+        img = Image.open(image_path)
+        img.load()
+        image_content.append(img)
+        logger.info(f"✓ Loaded: {os.path.basename(image_path)}")
+
+# image_content_parts = []
 # def load_images(images_path):
 #     global count
-#     if count==0:
+#     if count == 0:
 #         for image_path in images_path:
-#             img = Image.open(image_path)
-#             img.load()
-#             image_content.append(img)
-#             logger.info(f"✓ Loaded: {os.path.basename(image_path)}")
+#             with Image.open(image_path) as img:
+#                 # 1. Force Load
+#                 img.load()
+                
+#                 # 2. Resize if too large (CRITICAL for multi-thread reliability)
+#                 # Gemini doesn't need 4K. 1024px is plenty and 4x faster to upload.
+#                 max_size = 1024
+#                 if max(img.size) > max_size:
+#                     ratio = max_size / max(img.size)
+#                     new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
+#                     img = img.resize(new_size, Image.Resampling.LANCZOS)
+                
+#                 # 3. Convert to immutable BYTES immediately
+#                 buf = BytesIO()
+#                 # Default to PNG, or preserve original format if available
+#                 fmt = img.format if img.format else 'PNG'
+#                 img.save(buf, format=fmt)
+#                 byte_data = buf.getvalue()
+                
+#                 # 4. Store as a Gemini-ready Part dictionary
+#                 image_content_parts.append({
+#                     'mime_type': f'image/{fmt.lower()}',
+#                     'data': byte_data
+#                 })
+                
+#             logger.info(f"✓ Loaded & Optimized: {os.path.basename(image_path)}")
 
-#         if len(image_content) > 0:
+#         if len(image_content_parts) > 0:
 #             count = 1
-image_content_parts = []
-def load_images(images_path):
-    global count
-    if count == 0:
-        for image_path in images_path:
-            with Image.open(image_path) as img:
-                # 1. Force Load
-                img.load()
-                
-                # 2. Resize if too large (CRITICAL for multi-thread reliability)
-                # Gemini doesn't need 4K. 1024px is plenty and 4x faster to upload.
-                max_size = 1024
-                if max(img.size) > max_size:
-                    ratio = max_size / max(img.size)
-                    new_size = (int(img.size[0] * ratio), int(img.size[1] * ratio))
-                    img = img.resize(new_size, Image.Resampling.LANCZOS)
-                
-                # 3. Convert to immutable BYTES immediately
-                buf = BytesIO()
-                # Default to PNG, or preserve original format if available
-                fmt = img.format if img.format else 'PNG'
-                img.save(buf, format=fmt)
-                byte_data = buf.getvalue()
-                
-                # 4. Store as a Gemini-ready Part dictionary
-                image_content_parts.append({
-                    'mime_type': f'image/{fmt.lower()}',
-                    'data': byte_data
-                })
-                
-            logger.info(f"✓ Loaded & Optimized: {os.path.basename(image_path)}")
-
-        if len(image_content_parts) > 0:
-            count = 1
 
 def refine_prompt(user_prompt, variation_number=None, selected_color=None):
     """
@@ -85,10 +81,14 @@ def refine_prompt(user_prompt, variation_number=None, selected_color=None):
     reference_images_folder = "gemini_images"
     
     # Add color instruction if color is provided
-    color_instruction = ""
-    if selected_color:
-        color_instruction = f"\n\nCOLOR SPECIFICATION: Apply the color {selected_color} (hex code) to the Main product. Ensure accurate color matching to this exact hex value.Ensure that this color is not applied to anything other then the Main Object unless specified by the user"
+    if selected_color is not None:
+        color_instruction = f"\n\nCOLOR SPECIFICATION: Apply the color {selected_color} (hex code) to the Main product. Ensure accurate color matching to this exact hex value If the color for specified thing is specified by the user ask the gemini to make the user demanded area be the user demanded color, for example the user said rope should be green or blue, then only the rope should be blue and green , the handle should be this selected hex.Ensure that this color is not applied to anything other then the Main Object unless specified by the user. - For rope jumps with greadient colors, if the second color is not provided assume it black and tell it to gemini."
     
+    else :
+        color_instruction = f"""
+Color Gradient Handling:
+Review the user's prompt and identify any color gradient details. When constructing the Gemini 3 Pro prompt, explicitly specify that the extracted gradient should be applied ONLY to the main object. Include clear instructions that the background and secondary elements should NOT receive the gradient treatment unless the user specifically mentions them.
+"""
     # CRITICAL DOCUMENTATION FINDING: Gemini 3 prefers natural language over complex templates
     # Source: Official Gemini docs emphasize "Be descriptive, not repetitive"
     
@@ -108,96 +108,47 @@ def refine_prompt(user_prompt, variation_number=None, selected_color=None):
         if minimal_variations[var_idx]:
             variation_instruction = f"\n\nMINOR ADJUSTMENT: {minimal_variations[var_idx]}. This is the ONLY change allowed."
     
-    # IMPROVED: Direct, natural language system instruction
-    # Based on official docs: "Gemini 3 prefers direct, efficient answers"
-    # Remove XML bloat, focus on clear natural instructions
-    system_instruction = f"""You are an expert prompt engineer for Gemini 3 Pro Image editing. Your role is to create prompts that maintain EXACT physical fidelity to uploaded reference images while applying user-requested changes.
 
-CONTEXT:
-The user has uploaded reference images of a product. Your task is to create an editing prompt that preserves every physical detail while applying only the requested modifications.
+    system_instruction = f"""You are a professional Prompt Generation developer, your main goal is to create super good prompts Gemini 3 pro image gen to Edit images that are already provided to gemini 3 pro based on user query
+Your main goal is to convert User Query : {user_prompt} into a super good and professional editing based prompt.
+Here is the prompt template in which you will convert the user query into keep in mind that gemini 3 pro has been provided with the necessary images of the product provided, our main goal should be to create a prompt that tells the gemini to preserve all the necessary details of the product , also full filling all the editing necessasry requirments of the user
 
-CRITICAL FOCUS AREAS FOR PRODUCT PRESERVATION:
+Template : 
 
-1. PRIMARY COMPONENTS (highest priority):
-   - Exact shape, dimensions, and proportions of all major parts
-   - Precise surface texture patterns (ridges, grooves, patterns, embossing)
-   - Component connections and attachment points
-   - Weight distribution and structural proportions
-   - Surface finish characteristics (matte, glossy, textured, polished areas)
+``Using the provided image, change only the [specific element] to [new
+element/description]. Keep everything else in the image exactly the same,
+preserving the original style and composition.``
 
-2. TEXT AND BRANDING ELEMENTS:
-   - Any text, logos, or brand names printed/embossed/engraved on the product
-   - Font style, size, and placement of all text elements
-   - Text legibility and accuracy - spell exactly as shown
-   - Logo colors, proportions, and positioning
-   - Printing/marking method appearance (screen print, embossed, debossed, laser-etched)
+Here are the best practices for writing prompts:
 
-3. MATERIAL AND SURFACE CHARACTERISTICS:
-   - Exact material type and appearance for each component
-   - Surface texture and pattern details
-   - Color gradients, sheen, and transparency (if applicable)
-   - Natural curves, bends, or structural features
-   - Join lines, seams, and connection mechanisms
+- Be Hyper-Specific: The more detail you provide, the more control you have. Instead of "fantasy armor," describe it: "ornate elven plate armor, etched with silver leaf patterns, with a high collar and pauldrons shaped like falcon wings."
+- Provide Context and Intent: Explain the purpose of the image. The model's understanding of context will influence the final output. For example, "Create a logo for a high-end, minimalist skincare brand" will yield better results than just "Create a logo."
+- Use Step-by-Step Instructions: For complex scenes with many elements, break your prompt into steps. "First, create a background of a serene, misty forest at dawn. Then, in the foreground, add a moss-covered ancient stone altar. Finally, place a single, glowing sword on top of the altar."
+- Use "Semantic Negative Prompts": Instead of saying "no cars," describe the desired scene positively: "an empty, deserted street with no signs of traffic."
+- Control the Camera: Use photographic and cinematic language to control the composition. Terms like wide-angle shot, macro shot, low-angle perspective.
+- If the infromation about background is not given by the user ask for a white background
+- Put high emphasis on preserving the rope and handle details, The logos and text should be preserved.
+- Tell Gemini to make the photo cinematic.If a an angle is not specified use a super cinematic angle.
+- Remember the Jump rope or the main object inside the photo should be the main thing inside the image, so emphsize on making it the main thing, make sure to emphasize on focusing on the product and keep it in relative distance not too far
+- Here are the product dimensions which you can tell gemini so it can have better perspective:
+``The Timeless Jump Rope handles have a length of 6.3 inches (approximately 16 cm).
+Handle Specifications
+Length: The handles are 6.3 inches long.
 
-4. DETAILED FEATURES:
-   - Small components, buttons, switches, or functional elements
-   - Decorative details and ornamental features
-   - Any stitching, weaving, or joining patterns
-   - Hardware elements (screws, rivets, clasps, etc.)
-   - Unique identifying characteristics
+other similar freestyle jump ropes often have a handle diameter of approximately 0.9 inches (about 23 mm)``
 
-USER'S REQUEST:
-{user_prompt}
+- In the prompt ask gemini to make the product exactly of this color : {color_instruction}
 
-Everything else must remain identical to the references.{color_instruction}{variation_instruction}
 
-WHAT TO PRESERVE:
-Everything except what the user explicitly requests to change. This includes:
-- All component dimensions and shapes
-- Every text element and logo
-- Material construction and textures
-- Surface patterns and finish details
-- Product proportions and scale
-- Connection mechanisms and hardware
-- Structural features and details
+Important, Only Output the edited prompt. and give detailed instructions on everything. the postion the color the handle the rope the text
 
-CRITICAL - MAKE SURE GEMINI 3 PRO IMAGE GEN FOLLOWS THIS:
-- The logo and text direction should remain the same as in the reference images
-- Explicitly emphasize reference images as the source of truth
-- Tell the model to carefully study the reference images before generating
-- Put heavy emphasis that the product should match this exact specification: {color_instruction}
-- If information about background color is not provided, choose a white background
+Here are some example prompts with good results, You can take refrence from them:
 
-WHAT TO CHANGE:
-Only the specific attributes mentioned in the user's request, such as:
-- Color changes (apply to specified parts only)
-- Material finish changes (maintain same shape/texture depth)
-- Surface texture modifications (keep same physical form)
-- Style variations (while preserving core identity)
+- ``Using the provided image of the "Timeless Jump Rope," perform the following detailed image generation and editing tasks to place the product in a new, hyper-realistic environment.\n\n**Primary Objective:** Isolate the jump rope from its original background, change its color, and seamlessly integrate it into a newly generated, highly detailed scene as described below.\n\n**Step 1: Product Isolation and Preservation**\n*   **Isolate the Product:** Carefully extract the entire "Timeless Jump Rope," including both handles and the rope cable, from the provided image.\n*   **Preserve Critical Details:** It is absolutely essential to maintain the original integrity of the jump rope.\n    *   **Text and Logos:** Keep the "TIMELESS JUMP" text on the handles and the logo on the handle ends perfectly intact, preserving the font, size, position, and clarity.\n    *   **Form and Texture:** Retain the exact 3D shape, contours, and surface texture of the handles and the rope.\n    *   **Scale and Dimensions:** The product must be rendered with accurate proportions. The handles are 6.3 inches (16 cm) long with an approximate diameter of 0.9 inches (23 mm).\n\n**Step 2: Product Color Modification**\n*   **Apply Specific Color:** Change the color of the *entire* jump rope (both handles and the rope cable) to the exact hex code **#d722f5**. Ensure the color is applied uniformly while respecting the natural lighting and shadows of the new scene. This vibrant color should contrast sharply with the environment.\n*   **Color Exclusivity:** Do not apply the color #d722f5 to any other object in the scene.\n\n**Step 3: New Scene Generation and Composition**\n*   **Background Environment:** Create a rugged and realistic desert training camp scene. The ground should be a mix of coarse sand and sun-baked, cracked earth. The atmosphere should feel hot, arid, and dusty.\n*   **Product Placement:** Position the jump rope as the central focus of the image. It must be suspended between two weathered, thin metal poles that are staked into the ground. The rope should be draped between them, sagging naturally and gently in the middle under its own weight.\n*   **Surrounding Elements:** Populate the area around the base of the poles with authentic, sand-covered gear to build a narrative. Include:\n    *   A pair of worn, dusty combat boots.\n    *   Two weathered, olive-drab canvas tents in the mid-to-background, slightly out of focus.\n    *   A stack of wooden supply crates with faded, stenciled lettering.\n    *   A vintage-style military field radio and a metal canteen lying near the crates.\n\n**Step 4: Cinematography, Lighting, and Style**\n*   **Camera Shot:** Use a **super cinematic, slightly low-angle medium shot**. This perspective should make the jump rope appear prominent and heroic. The focus must be razor-sharp on the jump rope, with the immediate foreground and background having a natural, shallow depth of field.\n*   **Lighting:** The scene must be illuminated by **harsh, direct midday sunlight**. This should create strong, high-contrast, and well-defined sharp shadows on the ground cast by the poles, the rope, and all the surrounding gear. The intense light should emphasize the gritty textures of the sand, the weathered canvas, the rough wood of the crates, and the smooth surface of the jump rope.\n*   **Overall Mood and Style:** The final image must have a **high-impact, survival documentary style**. It should feel raw, authentic, and intense, as if it were a still frame from a high-budget documentary about elite training. The final composition should be balanced and professional, suitable for a high-end advertising campaign.``
+- ``Using the provided image of the "Timeless Jump Rope," perform the following detailed image generation and editing tasks to place the product in a new, hyper-realistic, and atmospheric environment.\n\n**Primary Objective:** Isolate the jump rope from its original background, change its color to a specific hex code, and seamlessly integrate it into a newly generated, highly detailed backstage scene that tells a story.\n\n**Step 1: Product Isolation and Preservation**\n*   **Isolate the Product:** Carefully and precisely extract the entire "Timeless Jump Rope," including both handles and the rope cable, from the provided image.\n*   **Preserve Critical Details:** It is absolutely essential to maintain the original integrity and fine details of the jump rope.\n    *   **Text and Logos:** The "TIMELESS JUMP" text on the handles and the logo on the handle ends must be kept perfectly intact. Preserve the original font, size, position, and sharpness.\n    *   **Form and Texture:** Retain the exact 3D shape, contours, and surface texture of the handles and the rope cable.\n    *   **Scale and Dimensions:** The product must be rendered with accurate real-world proportions. The handles are 6.3 inches (16 cm) long with an approximate diameter of 0.9 inches (23 mm).\n\n**Step 2: Product Color Modification**\n*   **Apply Specific Color:** Change the color of the *entire* jump rope (both handles and the rope cable) to the exact hex code **#FF5733**. Ensure the color is applied uniformly while naturally reacting to the new scene\'s lighting and shadows.\n*   **Color Exclusivity:** Do not apply the color #FF5733 to any other object or light source in the generated scene.\n\n**Step 3: New Scene Generation and Composition**\n*   **Background Environment:** Generate a photorealistic backstage area at an outdoor music festival just before the show begins. The ground should be a worn wooden stage or concrete floor. In the background, show the industrial metal framework of stage scaffolding.\n*   **Product Placement:** Position the jump rope as the focal point of the quiet scene. It must be **draped casually over a stack of two large, black, road-worn speaker flight cases**. The rope should be **loosely coiled and appear informal**, as if placed there by a performer during their pre-show routine.\n*   **Surrounding Elements:** Frame the scene with authentic, storytelling details to build the atmosphere. Include:\n    *   Thick black audio cables snaking across the floor, some held down with gaffers tape.\n    *   A handwritten setlist on a piece of paper, taped to the floor or the side of a speaker case.\n    *   An acoustic guitar leaning against a nearby amplifier or case, slightly out of focus.\n    *   A half-empty water bottle and a towel near the base of the speaker cases.\n\n**Step 4: Cinematography, Lighting, and Style**\n*   **Camera Shot:** Use a **super cinematic, eye-level medium shot**. The focus must be razor-sharp on the "Timeless Jump Rope," with the immediate foreground and background having a soft, natural bokeh (shallow depth of field). This will draw the viewer\'s eye directly to the product.\n*   **Lighting:** The scene must be illuminated by **soft, warm, early evening light (golden hour)**. This light should be directional, as if coming from the side of the stage, creating gentle highlights and long, soft shadows. The lighting is crucial for establishing the relaxed, quiet, pre-show atmosphere.\n*   **Overall Mood and Style:** The final image must have a **high-end, lifestyle editorial storytelling aesthetic**. It should feel authentic, candid, and professional, capturing a quiet, intimate moment of anticipation before the energy of a live performance. The composition should be balanced and visually compelling, suitable for a premium brand advertisement.``
 
-PHOTOGRAPHY SPECIFICATIONS (for consistency):
-- Camera: 45-degree elevated angle, 85mm lens, f/5.6 aperture
-- Lighting: Three-point softbox setup (key 45° left, fill 45° right at 50%, rim from behind), 5600K color temperature
-- Background: Pure seamless white (RGB 255,255,255)
-- Composition: Product centered, occupying 70% of frame height
-- Focus: Sharp throughout entire product, especially any text elements and fine details
 
-TEXT RENDERING RULES:
-- If the product has text/logos, preserve spelling and layout EXACTLY
-- Render all text legibly and sharply in focus
-- Maintain original font characteristics unless user requests changes
-- Keep logo proportions and colors accurate to reference
 
-OUTPUT FORMAT:
-Write a single, descriptive paragraph that:
-1. Begins with "Based on the uploaded reference images of the [product name/type], carefully study [specific key components and features visible in the images], the [material/construction details], and any text or branding elements..."
-2. States ONLY the requested changes explicitly
-3. Emphasizes preservation of all physical details, text/logos, and material characteristics
-4. Includes complete photography specifications
-5. Uses natural, descriptive language (not keyword lists)
-6. Ends with "Ensure the product is completely clean with no additional text, watermarks, or labels beyond what exists in the original design."
-
-Remember: Gemini 3 Pro Image excels at text rendering and detail preservation. Be explicit about maintaining existing text and logo elements - they are key product identifiers that must remain consistent across all variations.
 """
     try:
         import os
@@ -206,7 +157,7 @@ Remember: Gemini 3 Pro Image excels at text rendering and detail preservation. B
             local_images = []
             with image_lock:
                 # Create a fresh copy of the actual IMAGE OBJECT, not just the list
-                for img in image_content_parts:
+                for img in image_content:
                     local_images.append(img.copy())
             contents = [system_instruction] + local_images
             logger.info("Content loaded with images")
@@ -215,7 +166,7 @@ Remember: Gemini 3 Pro Image excels at text rendering and detail preservation. B
             logger.info("Content loaded without images")
 
         logger.info("Data sent to 2.5 pro\n")
-        logger.info(contents)
+        logger.info(system_instruction)
         
         client = genai.Client(api_key=GEMINI_API_KEY)
         
@@ -223,24 +174,24 @@ Remember: Gemini 3 Pro Image excels at text rendering and detail preservation. B
         # (Gemini 3 Pro Image is for the actual image generation, not prompt refinement)
         try:
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-2.5-pro",
                 contents=contents,
                 config=types.GenerateContentConfig(
                     temperature=0.5,  # Lower for more consistency
-                    top_p=0.85,       # Reduced for deterministic outputs
-                    top_k=30          # Tighter token selection
+                    # top_p=0.85,       # Reduced for deterministic outputs
+                    # top_k=30          # Tighter token selection
                 )
             )
 
         except Exception as e:
             logger.warning(f"Image failed, retrying text-only: {e}")
             response = client.models.generate_content(
-                model="gemini-2.5-flash",
+                model="gemini-2.5-pro",
                 contents=[system_instruction],
                 config=types.GenerateContentConfig(
-                    temperature=0.5,  # Lower for more consistency
-                    top_p=0.85,       # Reduced for deterministic outputs
-                    top_k=30          # Tighter token selection
+                    temperature=0.5  # Lower for more consistency
+                    # top_p=0.85,       # Reduced for deterministic outputs
+                    # top_k=30          # Tighter token selection
                 )
             )
         
@@ -302,13 +253,10 @@ def generate_image(user_prompt, image_paths, variation_number=None, base_seed=42
     # Create a fresh copy of the actual IMAGE OBJECT, not just the list
         api_image_parts = []
         with image_lock:
-            for img_dict in image_content_parts:
-                api_image_parts.append(
-                    types.Part.from_bytes(
-                        data=img_dict['data'],
-                        mime_type=img_dict['mime_type']
-                    )
-                )
+            for img_dict in image_content:
+                image = img_dict.copy()
+                api_image_parts.append(image)
+
         contents = [refined_prompt] + api_image_parts
         
         # Calculate deterministic seed for this variation
@@ -326,7 +274,7 @@ def generate_image(user_prompt, image_paths, variation_number=None, base_seed=42
             contents=contents,
             config=types.GenerateContentConfig(
                 response_modalities=['TEXT', 'IMAGE'],
-                temperature=0.5, 
+                temperature=1.0, 
                 image_config=types.ImageConfig(
                 aspect_ratio=aspect_ratio,
                 image_size=resolution
@@ -479,13 +427,10 @@ def generate_multiple_images_with_single_prompt(
 
     api_image_parts = []
     with image_lock:
-        for img_dict in image_content_parts:
-            api_image_parts.append(
-                types.Part.from_bytes(
-                    data=img_dict['data'],
-                    mime_type=img_dict['mime_type']
-                )
-            )
+        for img_dict in image_content:
+            image_copy = img_dict.copy()
+            api_image_parts.append(image_copy)
+
     message_content = [refined_prompt] + api_image_parts
     logger.info("🔧 Creating new persistent client")
     client = genai.Client(api_key=GEMINI_API_KEY)
@@ -494,13 +439,14 @@ def generate_multiple_images_with_single_prompt(
         model="gemini-3-pro-image-preview",
         config=types.GenerateContentConfig(
             response_modalities=['TEXT', 'IMAGE'],
-            temperature=0.0,
+            temperature=1.0,
             image_config=types.ImageConfig(
                 aspect_ratio=aspect_ratios[0],
                 image_size=resolution
             )
         )
     )
+    logger.info("\n\nMessage sent to gemini : ", message_content)
     response = chat_session.send_message(message_content)
 
     logger.info("✅ Chat session created successfully")
@@ -882,17 +828,33 @@ if 'selected_color' not in st.session_state:
 st.title("🎯 Product Image Generator")
 st.caption("Transform your product with AI")
 
+st.subheader("Gradient or Color")
+selected_value = st.selectbox(
+    "chose an option",
+    [
+        "Color", "Gradient"
+    ],
+    index=0
+)
+
+if (selected_value == "Color"):
 # Color Picker
-st.subheader("🎨 Color Selection")
-col_color1, col_color2 = st.columns([3, 1])
+    st.subheader("🎨 Color Selection")
+    col_color1, col_color2 = st.columns([3, 1])
 
-with col_color1:
-    selected_color = st.color_picker("Pick a color for your product", "#FF5733")
+    with col_color1:
+        selected_color = st.color_picker("Pick a color for your product", "#FF5733")
+        st.session_state.selected_color = selected_color
+
+    st.caption(f"Selected Color: {selected_color}")
+
+    st.divider()
+
+else :
+    st.write("Kindly explain the Gradient colors in the Prompt below")
+    selected_color = None
     st.session_state.selected_color = selected_color
-
-st.caption(f"Selected Color: {selected_color}")
-
-st.divider()
+    st.divider()
 
 # Image settings
 col_settings1, col_settings2 = st.columns(2)
@@ -920,11 +882,13 @@ with col_settings2:
 st.divider()
 
 folder_options = {
-    "PVC Jump Ropes": "gemini_images",
-    "Hercule S1": "Hercule",
-    "JAB 101": "JAB_101",
+    "Airborne-1 PVC": "gemini_images",
+    "Hercule-S1": "Hercule",
+    "JAB-101": "JAB_101",
     "Speed Rope": "Speed_Rope",
-    "B&W Strap Miri" : "B&W_Strap_Miri"
+    "B&W Strap Miri" : "B&W_Strap_Miri",
+    "Airborne-1 Beaded" : "02 - Airborne-1 Beaded",
+    "Color Flow Gradient" : "Color_Flow_Gradient"
 }
 
 # Create the dropdown with default set to "Gemini Images"
@@ -965,9 +929,8 @@ col1, col2 = st.columns([1, 1])
 
 with col1:
     if st.button("🎨 Generate Images", type="primary", use_container_width=True):
-        if not st.session_state.selected_color:
-            st.warning("⚠️ Please select a color first.")
-        elif prompt and image_paths:
+        
+        if prompt and image_paths:
             with st.spinner("Generating images..."):
                 logger.info("="*60)
                 logger.info("🚀 MULTIPLE IMAGE GENERATION STARTED")
@@ -1107,9 +1070,7 @@ with col1:
                     )
 with col2:
     if st.button("🎨 Generate 3 Variations", type="primary", use_container_width=True):
-        if not st.session_state.selected_color:
-            st.warning("⚠️ Please select a color first.")
-        elif prompt and image_paths:
+        if prompt and image_paths:
             with st.spinner("Generating 3 variations..."):
                 logger.info("="*60)
                 logger.info("🎨 MULTI-VARIATION GENERATION STARTED")
